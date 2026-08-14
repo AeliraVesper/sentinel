@@ -30,15 +30,36 @@ CYAN = "\033[36m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
+
+def _env_int(name: str, default: int) -> int:
+    """读环境变量为整数;非法值(非数字/负数)静默回退默认,进程绝不能因配置崩。"""
+    raw = os.environ.get(name, "")
+    try:
+        v = int(raw)
+        return v if v >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
 # 危险阈值(可被环境变量覆盖)
-WARN_MEM_MB = int(os.environ.get("SENTINEL_WARN_MEM_MB", "4096"))    # 可用内存低于此 → 黄
-CRIT_MEM_MB = int(os.environ.get("SENTINEL_CRIT_MEM_MB", "2048"))    # 可用内存低于此 → 红
-WARN_SWAP_PCT = int(os.environ.get("SENTINEL_WARN_SWAP_PCT", "50"))  # swap 使用率高于此 → 黄
-CRIT_SWAP_PCT = int(os.environ.get("SENTINEL_CRIT_SWAP_PCT", "80"))  # swap 使用率高于此 → 红
-WARN_TEMP_C = int(os.environ.get("SENTINEL_WARN_TEMP_C", "55"))      # 温度高于此 → 黄
-CRIT_TEMP_C = int(os.environ.get("SENTINEL_CRIT_TEMP_C", "70"))      # 温度高于此 → 红
-GUARD_INTERVAL = float(os.environ.get("SENTINEL_GUARD_INTERVAL", "10"))
-WATCH_INTERVAL = float(os.environ.get("SENTINEL_WATCH_INTERVAL", "5"))
+WARN_MEM_MB = _env_int("SENTINEL_WARN_MEM_MB", 4096)    # 可用内存低于/等于此 → 黄
+CRIT_MEM_MB = _env_int("SENTINEL_CRIT_MEM_MB", 2048)    # 可用内存低于此 → 红
+WARN_SWAP_PCT = _env_int("SENTINEL_WARN_SWAP_PCT", 50)  # swap 使用率高于此 → 黄
+CRIT_SWAP_PCT = _env_int("SENTINEL_CRIT_SWAP_PCT", 80)  # swap 使用率高于此 → 红
+WARN_TEMP_C = _env_int("SENTINEL_WARN_TEMP_C", 55)      # 温度高于此 → 黄
+CRIT_TEMP_C = _env_int("SENTINEL_CRIT_TEMP_C", 70)      # 温度高于此 → 红
+def _env_float(name: str, default: float) -> float:
+    """读环境变量为浮点;非法值/非正数回退默认。"""
+    raw = os.environ.get(name, "")
+    try:
+        v = float(raw)
+        return v if v > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+GUARD_INTERVAL = _env_float("SENTINEL_GUARD_INTERVAL", 10)
+WATCH_INTERVAL = _env_float("SENTINEL_WATCH_INTERVAL", 5)
 
 # 阈值可被环境变量覆盖(见文件头部注释)
 THERMAL_DIRS = [
@@ -76,9 +97,9 @@ def mem_status(mem: dict) -> dict:
     if avail and avail < CRIT_MEM_MB:
         level = "crit"
         reasons.append(f"可用内存仅 {avail}MB(<{CRIT_MEM_MB}MB)")
-    elif avail and avail < WARN_MEM_MB:
+    elif avail and avail <= WARN_MEM_MB:
         level = "warn"
-        reasons.append(f"可用内存 {avail}MB(<{WARN_MEM_MB}MB)")
+        reasons.append(f"可用内存 {avail}MB(<={WARN_MEM_MB}MB)")
     if swap_pct > CRIT_SWAP_PCT:
         level = "crit"
         reasons.append(f"swap 已用 {swap_pct}%")
@@ -103,11 +124,12 @@ def read_temperature() -> float | None:
     """读第一个可用的 thermal zone 温度,返回摄氏温度或 None。"""
     zones = ["/sys/class/thermal/thermal_zone0/temp"]
     try:
-        zones = [os.path.join(THERMAL_DIRS[0], d, "temp")
-                 for d in sorted(os.listdir(THERMAL_DIRS[0]))
-                 if d.startswith("thermal_zone")]
+        if THERMAL_DIRS:
+            zones = [os.path.join(THERMAL_DIRS[0], d, "temp")
+                     for d in sorted(os.listdir(THERMAL_DIRS[0]))
+                     if d.startswith("thermal_zone")]
     except OSError:
-        pass
+        pass  # fallback 到写死的默认路径
     for z in zones:
         try:
             with open(z) as f:
